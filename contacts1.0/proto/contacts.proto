@@ -1,0 +1,10 @@
+// 指定语法标准
+edition = "2024";
+
+// 指定命名空间
+package contacts;
+
+message PeopleInfo{
+    string name = 1;
+    int32 age = 2;
+}
