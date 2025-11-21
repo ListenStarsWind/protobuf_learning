@@ -1,0 +1,17 @@
+// 指定语法标准
+edition = "2024";
+
+// 指定命名空间
+package contacts;
+
+import "phone.proto";
+
+message PeopleInfo{
+    string name = 1;
+    int32 age = 2;
+    repeated phone.PhoneInfo phones = 3;
+}
+
+message Contacts{
+    repeated PeopleInfo contacts = 1;
+}
