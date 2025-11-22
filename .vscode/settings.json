@@ -5,5 +5,8 @@
         "--clang-tidy",
         "--cross-file-rename",
         "--header-insertion=never"
-    ]
+    ],
+   // 关闭有关代码质量的Buf功能
+    "buf.lint.enabled": false,     
+  "buf.breaking.enabled": false
 }

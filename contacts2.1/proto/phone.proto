@@ -1,0 +1,18 @@
+// 指定语法标准
+edition = "2023";
+
+// 指定命名空间
+package phone;
+
+// 由于处在不同的域中, 所以我们仍旧可以使用 1 2 3 这些编号
+message PhoneInfo{
+    string country = 1;
+    string number = 2;
+
+    enum PhoneType{
+        MP = 0;     // 移动电话
+        TEL = 1;    // 固定电话
+    }
+
+    PhoneType type = 3;
+}
