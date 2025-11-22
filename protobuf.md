@@ -169,7 +169,9 @@ contacts1.0  protobuf.md  wind-libcxx-pkg-2025.tar.gz
 [whisper@starry-sky wind-libcxx-pkg-2025]$ sudo ./install.sh
 ```
 
-另外, 我们再装一个 `proto` 的语法分析器, 首先来到 `bufbuild`这个 `github` 项目, 在其中复制`-x86_64`后缀的文件夹地址, 然后`wget`直接安装
+另外, 我们再装一个 `proto` 的代码质量分析器, 叫做 `Buf`, 来提供`proto`源文件的高亮. 对于 `protobuf` 来说, 没有类似于 `clangd` 那种级别的语法分析器, 所以如果你写一个语法错误的`proto`源文件,  `Buf`甚至有可能不报错, 那怎么知道是否有错呢? 也很简单, 交给`protoc` 编译一下, 编过不就没有错吗. 
+
+首先来到 `bufbuild`这个 `github` 项目, 在其中复制`-x86_64`后缀的文件夹地址, 然后`wget`直接安装
 
 ![image-20251119222250260](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251119222250260.png)
 
@@ -656,6 +658,74 @@ build.ninja  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.j
 
 另外还有静态成员函数 `google::protobuf::ShutdownProtobufLibrary();  `用于析构 `protobuf` 创建的全局属性对象: 可能你正在做很底层的东西, 底层到它可能没有完善的自动析构体系, 此时如果你希望, `protobuf`全局属性对象刷新或者析构, 你就可以调用它, 以确保有明确的全局属性析构或者刷新, 它如果要写的话, 一般写在执行流的末尾, 比如 `main` 函数末尾.
 
+在上面, 我们主要做的是将通讯录新增一个联系人, 接下来, 我们将会再写一份代码, 主要是将通讯录重新反序列化出来, 并打印显示. 为了以示区分, 之前的 `main` 函数内容会被放在 `func1`里面.
 
+`func2` 的具体内容没什么可说的
+
+![image-20251122195409143](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251122195409143.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build .
+[2/2] Linking CXX executable demo
+[wind@Ubuntu build]$ ./demo 
+联系人姓名: 赤城
+联系人年龄: 100
+第1份电话号码: 83425
+
+[wind@Ubuntu build]$ 
+```
+
+在上面, 我们用代码以自然语言的方式查看了二进制文件的内容, 但是呢? 写代码感觉有些重了, 可能我只是想稍微查看一下, 看看符不符合自己的预期, 此时我们就可以用 `protoc`的 `decode` 选项进行快速查看. 这个选项将会以标准输入的方式读取二进制流, 我们只需要为他提供涉及到的 `.proto` 源文件和直接涉及到的具体的消息类型即可.
+
+```shell
+[wind@Ubuntu build]$ /opt/libcxx-pkgs/bin/protoc --proto_path=../proto/ --decode=contacts.Contacts contacts.proto < contacts.bin 
+contacts {
+  name: "\350\265\244\345\237\216"
+  age: 100
+  phones {
+    country: "86"
+    number: "83425"
+  }
+}
+[wind@Ubuntu build]$ 
+```
+
+因为 `protoc` 默认使用 ASCII 码, 所以中文没有正常显示. 
+
+## 通讯录 2.1
+
+下面, 我们将会给通讯录引入一个小改动: 我们将会在 `PhoneInfo` 消息中引入一个新的字段, 该字段是一个枚举类型, 用于描述号码的类型, 比如, 固定电话, 又或者, 移动电话.
+
+![image-20251122213134609](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251122213134609.png)
+
+关于枚举类型，其中字段后的数字，与其理解成字段的编号，不如理解成枚举常量的值，更加合适。枚举常量的值必须从 0 开始，并且不能为负数。
+
+另外，无论是在 `protobuf` 还是 `C++` 中，枚举类型里的枚举常量和类中的字段是不同的：枚举常量是一个已经实例化的常量，而类的字段只是一个声明，除非它是静态的，否则在 `main` 函数之前不会被实例化。我之所以强调这一点，是因为它关联到枚举的另一个特点：枚举会把自身的枚举常量公开到父命名域。
+
+这两个特点结合起来，就导致在同一个命名域下的两个枚举类型中，不能出现同名的枚举常量：因为枚举常量是公开的，可以被视为存在于父命名域中；同时它已经是实例化的对象，这意味着在同一个命名域下出现同名对象是不允许的——实际上，如果出现同名，编译器也会报错。
+
+我们看到 `Buf` 没报错, 我们之前也说过, `Buf`更多是代码质量上的检查, 我们只是顺带用一下高亮, 所以这也没什么关系
+
+![image-20251122224908255](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251122224908255.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build .
+[1/6] Generating contacts.pb.cc/h
+FAILED: gen/proto/contacts.pb.cc gen/proto/contacts.pb.h /home/wind/protobuf_learning/contacts2.1/build/gen/proto/contacts.pb.cc /home/wind/protobuf_learning/contacts2.1/build/gen/proto/contacts.pb.h 
+cd /home/wind/protobuf_learning/contacts2.1/build && /opt/libcxx-pkgs/bin/protoc-34.0.0 --cpp_out=/home/wind/protobuf_learning/contacts2.1/build/gen/proto --proto_path=/home/wind/protobuf_learning/contacts2.1/proto /home/wind/protobuf_learning/contacts2.1/proto/contacts.proto
+/home/wind/protobuf_learning/contacts2.1/proto/phone.proto:18:9: "MP" is already defined in "phone.PhoneInfo".
+/home/wind/protobuf_learning/contacts2.1/proto/phone.proto:18:9: Note that enum values use C++ scoping rules, meaning that enum values are siblings of their type, not children of it.  Therefore, "MP" must be unique within "phone.PhoneInfo", not just within "A".
+/home/wind/protobuf_learning/contacts2.1/proto/contacts.proto:7:1: Import "phone.proto" was not found or had errors.
+/home/wind/protobuf_learning/contacts2.1/proto/contacts.proto:12:14: "phone.PhoneInfo" is not defined.
+[2/6] Generating phone.pb.cc/h
+FAILED: gen/proto/phone.pb.cc gen/proto/phone.pb.h /home/wind/protobuf_learning/contacts2.1/build/gen/proto/phone.pb.cc /home/wind/protobuf_learning/contacts2.1/build/gen/proto/phone.pb.h 
+cd /home/wind/protobuf_learning/contacts2.1/build && /opt/libcxx-pkgs/bin/protoc-34.0.0 --cpp_out=/home/wind/protobuf_learning/contacts2.1/build/gen/proto --proto_path=/home/wind/protobuf_learning/contacts2.1/proto /home/wind/protobuf_learning/contacts2.1/proto/phone.proto
+/home/wind/protobuf_learning/contacts2.1/proto/phone.proto:18:9: "MP" is already defined in "phone.PhoneInfo".
+/home/wind/protobuf_learning/contacts2.1/proto/phone.proto:18:9: Note that enum values use C++ scoping rules, meaning that enum values are siblings of their type, not children of it.  Therefore, "MP" must be unique within "phone.PhoneInfo", not just within "A".
+ninja: build stopped: subcommand failed.
+[wind@Ubuntu build]$ 
+```
+
+关键是这行, `/home/wind/protobuf_learning/contacts2.1/proto/phone.proto:18:9: "MP" is already defined in "phone.PhoneInfo".`, 就是 `protoc` 报错使用了已经定义的枚举常量, 只不过这里没停止, `clang++`接着用错的代码继续编译, 然后报了后面那些错. 
 
 # 完
