@@ -4,12 +4,18 @@ edition = "2023";
 // 指定命名空间
 package contacts;
 
+import "google/protobuf/any.proto";
 import "phone.proto";
+
+message Address{
+    string address = 1;
+}
 
 message PeopleInfo{
     string name = 1;
     int32 age = 2;
     repeated phone.PhoneInfo phones = 3;
+    google.protobuf.Any address = 4;
 }
 
 message Contacts{
