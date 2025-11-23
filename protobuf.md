@@ -169,29 +169,13 @@ contacts1.0  protobuf.md  wind-libcxx-pkg-2025.tar.gz
 [whisper@starry-sky wind-libcxx-pkg-2025]$ sudo ./install.sh
 ```
 
-另外, 我们再装一个 `proto` 的代码质量分析器, 叫做 `Buf`, 来提供`proto`源文件的高亮. 对于 `protobuf` 来说, 没有类似于 `clangd` 那种级别的语法分析器, 所以如果你写一个语法错误的`proto`源文件,  `Buf`甚至有可能不报错, 那怎么知道是否有错呢? 也很简单, 交给`protoc` 编译一下, 编过不就没有错吗. 
+另外, 在这里, 我们再安装一个 `protobuf` 的语法分析器, 叫做`Tooltitude for Protobuf`, 直接在 VS Code 插件市场搜一下:
 
-首先来到 `bufbuild`这个 `github` 项目, 在其中复制`-x86_64`后缀的文件夹地址, 然后`wget`直接安装
+![image-20251123135245859](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123135245859.png)
 
-![image-20251119222250260](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251119222250260.png)
+装完它会弹出一个协议界面，因为这是个闭源的商业扩展（不是完全开源的那种），直接点右下角的 Accept 就行，不用纠结。尽管如此, 它的基本功能, 比如语法高亮、补全、跳转、悬停, 什么的都是免费的, 而且也比较新.
 
-```shell
-[wind@Ubuntu ~]$ wget https://github.com/bufbuild/buf/releases/download/v1.60.0/buf-Linux-x86_64
-[wind@Ubuntu ~]$ # 1. 移动文件到系统目录
-sudo mv buf-Linux-x86_64.1 /usr/local/bin/buf
-
-# 2. 设置执行权限
-sudo chmod +x /usr/local/bin/buf
-
-# 3. 验证安装（不需要修改 PATH）
-buf --version
-1.60.0
-[wind@Ubuntu ~]$
-```
-
-接着, 我们在 code 上再安装配套的插件, 名字叫`Buf`, 安装, 然后刷新一下窗口
-
-![image-20251119222457451](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251119222457451.png)
+需要注意的是, 和其它的`protobuf`语法分析服务, 比如更加传统的`vscode-protoc`一样, 它们的语法分析没有那么严格: 即使有些错误的语法, 它也不一定能分析出来.
 
 在下面的学习中, 我们将通过 "项目推进" 的方式来进行: 由于 `protobuf` 是由一个个小知识点组成的, 所以我们将通过一系列的项目认识它的各种用法, 先从最基本的入手, 再逐步深入.
 
@@ -702,9 +686,9 @@ contacts {
 
 另外，无论是在 `protobuf` 还是 `C++` 中，枚举类型里的枚举常量和类中的字段是不同的：枚举常量是一个已经实例化的常量，而类的字段只是一个声明，除非它是静态的，否则在 `main` 函数之前不会被实例化。我之所以强调这一点，是因为它关联到枚举的另一个特点：枚举会把自身的枚举常量公开到父命名域。
 
-这两个特点结合起来，就导致在同一个命名域下的两个枚举类型中，不能出现同名的枚举常量：因为枚举常量是公开的，可以被视为存在于父命名域中；同时它已经是实例化的对象，这意味着在同一个命名域下出现同名对象是不允许的——实际上，如果出现同名，编译器也会报错。
+这两个特点结合起来，就导致在同一个命名域下的两个枚举类型中，不能出现同名的枚举常量：因为枚举常量是公开的，可以被视为存在于父命名域中；同时它已经是实例化的对象，这意味着在同一个命名域下出现同名对象, 而这是不被允许的——实际上，如果出现同名，编译器也会报错。
 
-我们看到 `Buf` 没报错, 我们之前也说过, `Buf`更多是代码质量上的检查, 我们只是顺带用一下高亮, 所以这也没什么关系
+我们看到插件没警告, 我们之前也说过, 它的语法分析比较"宽容", 但这也没什么关系, 我们直接用 `protoc` 编译一下就行了
 
 ![image-20251122224908255](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251122224908255.png)
 
@@ -727,5 +711,59 @@ ninja: build stopped: subcommand failed.
 ```
 
 关键是这行, `/home/wind/protobuf_learning/contacts2.1/proto/phone.proto:18:9: "MP" is already defined in "phone.PhoneInfo".`, 就是 `protoc` 报错使用了已经定义的枚举常量, 只不过这里没停止, `clang++`接着用错的代码继续编译, 然后报了后面那些错. 
+
+如果你把 `A`移到其它的文件, 并在这里引入它, 那也会报错, 这是同样的道理, 我就不说原因了.
+
+好的, 现在, 我们把`phone.proto`再改回正确的, 并重新编译
+
+![image-20251123143101917](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123143101917.png)
+
+我们看到, 对于嵌套定义的类型来说, 其名字是有特点的, 它的父类型会以前缀的方式放在`proto`文件的类型前, 这在枚举常量的名字上也有体现, 总的来说, 这些操作是为了让`protoc`生成的代码有更高的质量, 看起来一清二楚.  另外, 这里还有两个枚举值, 我们暂且不谈--时候未到.
+
+`PhoneInfo_PhoneType_IsValid`用于判断一个整型是否是有效的枚举常量值, `PhoneInfo_PhoneType_Name`是把枚举常量的名字以字面量形式返回.
+
+与之对应的, `PeopleInfo`也增加了对应的字段操作接口
+
+![image-20251123143444989](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123143444989.png)
+
+接下来, 是把`main.cc`中的两个`func`也做对应的适配.
+
+![image-20251123144739867](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123144739867.png)
+
+注意直接取是枚举值
+
+![image-20251123145131066](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123145131066.png)
+
+为了方便起见, 我们再加个命令行参数吧
+
+![image-20251123150222117](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123150222117.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build .
+ninja: no work to do.
+[wind@Ubuntu build]$ ls
+build.ninja  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.json  demo  gen
+[wind@Ubuntu build]$ cp ~/protobuf_learning/contacts2.0/build/contacts.bin .
+[wind@Ubuntu build]$ ./demo 1
+正在添加一个新的联系人: 
+请输入联系人的姓名: 企业    
+请输入年龄: 89
+请输入联系人电话号码, 直接回车结束记录, 第1份: 731820514
+您输入的电话号码类型是: 1.移动电话, 2.固定电话1
+请输入联系人电话号码, 直接回车结束记录, 第2份: 
+一个新的联系人已经添加
+[wind@Ubuntu build]$ ./demo 2
+联系人姓名: 赤城
+联系人年龄: 100
+第1份电话号码: 83425, 类型: MP
+
+联系人姓名: 企业
+联系人年龄: 89
+第1份电话号码: 731820514, 类型: MP
+
+[wind@Ubuntu build]$ 
+```
+
+我们看到一个特别的现象是, 原先的"2.0"版本根本没有类型, 但在这里, 我们却读出了类型, 这就和枚举类型的默认值有关, 新版本的`protobuf`会对之前老版本二进制流中不存在的字段取为默认值, 对于枚举类型来说, 就是枚举值为0那个, 所以在这里, "赤城" 也能看到电话号码类型
 
 # 完
