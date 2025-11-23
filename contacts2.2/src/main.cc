@@ -70,6 +70,17 @@ int func1() {
                 break;
         }
     }
+
+    contacts::Address address;
+    cout << format("请输入联系人地址: ");
+    string addr;
+    getline(cin, addr);
+    address.set_address(addr);
+
+    auto _address = people->mutable_address();
+    _address->PackFrom(
+        address);  // 由于它其实涉及到序列化的过程, 所以也有失败的可能, 但当前我们就不判断了
+
     cout << format("一个新的联系人已经添加\n");
 
     // 持久化数据
@@ -118,6 +129,15 @@ int func2() {
             auto phone = people.phones(j);
             cout << format("第{}份电话号码: {}, 类型: {}\n", j + 1, phone.number(),
                            phone.PhoneType_Name(people.phones(j).type()));
+        }
+
+        // 如果二进制流里面有该字段, 并且是我们期望的类型
+        if (people.has_address() && people.address().Is<contacts::Address>()) {
+            contacts::Address address;
+            people.address().UnpackTo(&address);  // 这里也不判断成功与否了
+            if (!address.address().empty()) {
+                cout << format("联系人地址: {}\n", address.address());
+            }
         }
         cout << endl;
     }
