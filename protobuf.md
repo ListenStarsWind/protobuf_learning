@@ -137,18 +137,18 @@ cd /tmp
 rm -rf protobuf
 git clone --depth 1 https://github.com/protocolbuffers/protobuf.git
 cd protobuf
-
-cmake -B build -G Ninja \
-    -DCMAKE_C_COMPILER=clang-21 \
-    -DCMAKE_CXX_COMPILER=clang++-21 \
-    -DCMAKE_CXX_FLAGS="-stdlib=libc++ -O3 -DNDEBUG" \
-    -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++abi" \
-    -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX \
-    -DCMAKE_PREFIX_PATH=$INSTALL_PREFIX \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DBUILD_SHARED_LIBS=ON \
-    -Dprotobuf_BUILD_TESTS=OFF \
-    -Dprotobuf_ABSL_PROVIDER=package
+    
+cmake -B build -G Ninja 
+    -DCMAKE_C_COMPILER=clang-21 
+    -DCMAKE_CXX_COMPILER=clang++-21 
+    -DCMAKE_CXX_FLAGS="-stdlib=libc++ -O3 -DNDEBUG" 
+    -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -lc++abi" 
+    -DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX 
+    -DCMAKE_PREFIX_PATH=$INSTALL_PREFIX 
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON 
+    -DBUILD_SHARED_LIBS=ON 
+    -Dprotobuf_BUILD_TESTS=OFF 
+    -Dprotobuf_ABSL_PROVIDER=package
 
 cmake --build build -j$(nproc)
 sudo cmake --install build
@@ -765,5 +765,79 @@ build.ninja  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.j
 ```
 
 我们看到一个特别的现象是, 原先的"2.0"版本根本没有类型, 但在这里, 我们却读出了类型, 这就和枚举类型的默认值有关, 新版本的`protobuf`会对之前老版本二进制流中不存在的字段取为默认值, 对于枚举类型来说, 就是枚举值为0那个, 所以在这里, "赤城" 也能看到电话号码类型
+
+## 通讯录 2.2
+
+在通讯录 2.2 中, 我们将会为通讯录添加一个地址字段, 但重要的不是这个字段, 而是我们将借此使用 `protobuf` 中的一种泛用类型, 名字叫做`Any` 类型. 顾名思义, 这个类型可以接收其它任何的普通`Message`类型. 我们在安装目录下, 也能找到他的源码
+
+![image-20251123193826257](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123193826257.png)
+
+往下看, 我们发现, `Any` 本质上也是一个 Message, 第一个字段是原来类型的名字, 第二个, 则是这个类型经过序列化形成的二进制流.
+
+![image-20251123194454022](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123194454022.png)
+
+由于所有的 `Message` 类型都能进行序列化, 这使得, `Any` 真正变成了一个万能类型, 不管什么类型, 都可以往里面装.
+
+为什么有 `Any` 这种东西呢? 从设计哲学的角度来说, 这使得使用`Any` 的`Message` 有很强的兼容性和可扩展性, 可以适应各种各样的对象, 这就好比我们之前学习的一些协议, 可能某些字段现在并不使用, 但以后可能使用, 所以它仍旧在协议, 从更为现实的生态角度来看, 相信我们也能看出来, `protobuf` 是谷歌生态下的, 为了让`protobuf`融合进 Google 的生态圈, 它也必须要有这种类型.
+
+接下来我们看看与之对应的C++代码
+
+![image-20251123205654675](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123205654675.png)
+
+其中`PackFrom`就是把别的  Message 装进 Any 中, `InternalPackFrom`这个函数中其实就调用了 Message 自己的序列化方法, 把自己写到`value`字段了. `UnpackTo`就是直接转换为原来的类型, 
+
+除此之外, 下面还有一个 `Is` 接口, 用来判断原来的类型与 T 是否是同一类型
+
+![image-20251123210548025](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123210548025.png)
+
+补充完这些前置知识后, 我们就再修改一下`proto` 源文件
+
+![image-20251123205439032](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123205439032.png)
+
+重新编译后, 我们也能看到相应的编译方法
+
+![image-20251123205518864](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123205518864.png)
+
+不过重点不在这里, 在我们之前看到`Any`自己的接口
+
+接下来, 我们还是老样子, 去改那两个 `func`
+
+![image-20251123225034438](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123225034438.png)
+
+![image-20251123225055515](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251123225055515.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build .
+ninja: no work to do.
+[wind@Ubuntu build]$ ls
+build.ninja  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.json  demo  gen
+[wind@Ubuntu build]$ cp ../../contacts2.1/build/contacts.bin .
+[wind@Ubuntu build]$ ./demo 1
+正在添加一个新的联系人: 
+请输入联系人的姓名: 欧根亲王
+请输入年龄: 87
+请输入联系人电话号码, 直接回车结束记录, 第1份: 830194671
+您输入的电话号码类型是: 1.移动电话, 2.固定电话1
+请输入联系人电话号码, 直接回车结束记录, 第2份: 
+请输入联系人地址: 铁血
+一个新的联系人已经添加
+[wind@Ubuntu build]$ ./demo 2
+联系人姓名: 赤城
+联系人年龄: 100
+第1份电话号码: 83425, 类型: MP
+
+联系人姓名: 企业
+联系人年龄: 89
+第1份电话号码: 731820514, 类型: MP
+
+联系人姓名: 欧根亲王
+联系人年龄: 87
+第1份电话号码: 830194671, 类型: MP
+联系人地址: 铁血
+
+[wind@Ubuntu build]$ 
+```
+
+
 
 # 完
