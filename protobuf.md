@@ -166,7 +166,7 @@ $INSTALL_PREFIX/bin/protoc --version
 contacts1.0  protobuf.md  wind-libcxx-pkg-2025.tar.gz
 [whisper@starry-sky protobuf_learning]$ tar -xzf wind-libcxx-pkg-2025.tar.gz
 [whisper@starry-sky protobuf_learning]$ cd wind-libcxx-pkg-2025/
-[whisper@starry-sky wind-libcxx-pkg-2025]$ sudo ./install.sh
+[whisper@starry-sky wind-libcxx-pkg-2025]$ ./install.sh
 ```
 
 另外, 在这里, 我们再安装一个 `protobuf` 的语法分析器, 叫做`Tooltitude for Protobuf`, 直接在 VS Code 插件市场搜一下:
@@ -346,14 +346,12 @@ contacts.pb.cc  contacts.pb.h
 这里我就不贴命令行生成指令, 太长了,  还是让 `cmake` 根据 config 文件自己判断吧, 下面是 `CMakeLists.txt`的内容
 
 ```cmake
-# 最低 cmake 版本
+# 最低 cmake 版本要求
 cmake_minimum_required(VERSION 3.22)
-
-# 使用 C++ 这门语言
 project(ContactsDemo LANGUAGES CXX)
 
 # ==============================================================================
-# 1. 强制使用 Clang-21 + libc++ 以配合我们之前本地编译的库文件
+# 1. 强制用 Clang-21 + libc++（避免跑偏）
 # ==============================================================================
 if (DEFINED ENV{CXX})
     set(CMAKE_CXX_COMPILER $ENV{CXX})
@@ -362,94 +360,88 @@ else()
 endif()
 
 if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "本项目必须用 Clang 21 + libc++ 编译！请执行：export CXX=clang++-21")
+    message(FATAL_ERROR "本项目必须用 Clang 21 + libc++ 编译，先执行：export CXX=clang++-21")
 endif()
 
-# 创建一些变量, 控制编译行为
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)                 # 关闭 GNU 扩展，更纯粹
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)         # 生成 clangd 引导文件
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# 强制使用 libc++
 add_compile_options("-stdlib=libc++")
 add_link_options("-stdlib=libc++" "-lc++abi")
-
-message(STATUS "已强制启用 Clang 21 + libc++")
+message(STATUS "Clang 21 + libc++ 已启用")
 
 # ==============================================================================
-# 2. 查找我们自己编译的纯净 Protobuf + Abseil
+# 2. 查找我们自己装的 Protobuf + Abseil
 # ==============================================================================
-# 为环境变量中的库搜索路径增加新的前缀 /opt/libcxx-pkgs
-list(PREPEND CMAKE_PREFIX_PATH
-    "$ENV{LIBCXX_PKGS}"
-    "/opt/libcxx-pkgs"
-)
-
-# 让 cmake 以 config 模式寻找它们
+list(PREPEND CMAKE_PREFIX_PATH "/opt/libcxx-pkgs")
 find_package(absl CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
 
 # ==============================================================================
-# 3. 自动查找并生成所有 .proto 文件（支持 proto/ 任意层级子目录）
+# 3. 自己控制 protoc 生成流程（稳定，可追踪依赖）
 # ==============================================================================
 set(PROTO_DIR "${CMAKE_SOURCE_DIR}/proto")
-file(GLOB_RECURSE PROTO_FILES "${PROTO_DIR}/*.proto")
-
-if (NOT PROTO_FILES)
-    message(FATAL_ERROR "在 ${PROTO_DIR} 目录下没有找到任何 .proto 文件！")
-endif()
-
 set(PROTO_GEN_DIR "${CMAKE_BINARY_DIR}/gen/proto")
 file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
 
+# 找所有 .proto 文件
+file(GLOB_RECURSE PROTO_FILES RELATIVE "${PROTO_DIR}" "${PROTO_DIR}/*.proto")
+if (NOT PROTO_FILES)
+    message(FATAL_ERROR "在 ${PROTO_DIR} 里没找到 .proto 文件")
+endif()
+
+# 存放生成出来的 .cc/.h
 set(PROTO_SRCS "")
 set(PROTO_HDRS "")
 
-# 以循环的方式, 外部调用 protoc 编译生成对应代码
-foreach(proto ${PROTO_FILES})
-    file(RELATIVE_PATH proto_rel "${PROTO_DIR}" "${proto}")
-    get_filename_component(proto_dir "${proto_rel}" DIRECTORY)
-    get_filename_component(proto_name "${proto}" NAME_WE)
+# 逐个调用 protoc
+foreach(proto_rel IN LISTS PROTO_FILES)
+    get_filename_component(proto_dir  "${proto_rel}" DIRECTORY)      # 可能的子目录
+    get_filename_component(proto_name "${proto_rel}" NAME_WE)        # 不带后缀名
 
-    set(out_dir "${PROTO_GEN_DIR}/${proto_dir}")
+    set(abs_proto "${PROTO_DIR}/${proto_rel}")
+    set(out_dir   "${PROTO_GEN_DIR}/${proto_dir}")
+    set(out_cc    "${out_dir}/${proto_name}.pb.cc")
+    set(out_h     "${out_dir}/${proto_name}.pb.h")
+
+    # 输出目录先建好
     file(MAKE_DIRECTORY "${out_dir}")
 
-    set(out_cc "${out_dir}/${proto_name}.pb.cc")
-    set(out_h  "${out_dir}/${proto_name}.pb.h")
-
     add_custom_command(
-        OUTPUT "${out_cc}" "${out_h}"
+        OUTPUT  "${out_cc}" "${out_h}"
         COMMAND protobuf::protoc
-            --cpp_out=${PROTO_GEN_DIR}
-            --proto_path=${PROTO_DIR}
-            "${proto}"
-        DEPENDS "${proto}" protobuf::protoc
-        COMMENT "Generating ${proto_name}.pb.cc/h"
+                --cpp_out=${PROTO_GEN_DIR}
+                --proto_path=${PROTO_DIR}
+                --dependency_out=${out_cc}.d
+                "${abs_proto}"
+        COMMAND ${CMAKE_COMMAND} -E sleep 0   # 避免时间戳偶尔不对
+        DEPENDS "${abs_proto}" protobuf::protoc
+        DEPFILE "${out_cc}.d"                 # protoc 的 .d 用来做依赖跟踪
+        COMMENT "protoc 生成: ${proto_rel}"
         VERBATIM
-    )
+    ) 
+
     list(APPEND PROTO_SRCS "${out_cc}")
-    list(APPEND PROTO_HDRS "${out_h}")
+    list(APPEND PROTO_HDRS "${out_h}") 
 endforeach()
 
 # ==============================================================================
-# 4. 主程序（只有一个 demo）
+# 4. 主程序入口
 # ==============================================================================
-# 明确依赖关系, 生成可执行程序时为 PROTO_* 初始化, 即调用前面的外部命令
 add_executable(demo
     src/main.cc
     ${PROTO_SRCS}
     ${PROTO_HDRS}
 )
 
-# 指定项目级的头文件搜索路径
 target_include_directories(demo PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${PROTO_GEN_DIR}
+    ${PROTO_GEN_DIR}          # 生成的 .pb.h 都放这里
 )
 
-# 进行必要链接
 target_link_libraries(demo PRIVATE
     protobuf::libprotobuf
     absl::strings
@@ -457,18 +449,19 @@ target_link_libraries(demo PRIVATE
 )
 
 # ==============================================================================
-# 5. 编译信息
+# 5. 打印一下关键信息
 # ==============================================================================
 message(STATUS "")
 message(STATUS "==================================================")
-message(STATUS " 项目      : ${PROJECT_NAME}")
-message(STATUS " 编译器    : ${CMAKE_CXX_COMPILER} (${CMAKE_CXX_COMPILER_ID})")
-message(STATUS " 标准库    : libc++")
-message(STATUS " Proto 文件: ${PROTO_FILES}")
-message(STATUS " 生成目录  : ${PROTO_GEN_DIR}")
-message(STATUS " 可执行文件: demo")
+message(STATUS " 项目          : ${PROJECT_NAME}")
+message(STATUS " 编译器        : ${CMAKE_CXX_COMPILER} (${CMAKE_CXX_COMPILER_ID})")
+message(STATUS " 标准库        : libc++")
+message(STATUS " Proto 文件    : ${PROTO_FILES}")
+message(STATUS " 生成目录      : ${PROTO_GEN_DIR}")
+message(STATUS " 可执行文件    : demo")
 message(STATUS "==================================================")
 message(STATUS "")
+
 ```
 
 啊, 对了, 如果像用`clangd`语法分析器的话, 除了前面环境搭建的第一个脚本安装 `clangd`本体之外, 还要在code中安装同名的扩展哟, 并且在库的根目录下, 指明一下 `clangd`引导文件, `compile_commands.json`的位置在 build 下.
@@ -835,6 +828,65 @@ build.ninja  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.j
 第1份电话号码: 830194671, 类型: MP
 联系人地址: 铁血
 
+[wind@Ubuntu build]$ 
+```
+
+## 通讯录 2.3
+
+在这个版本中, 我们将会使用 `oneof` 类型, 该类型可以从多个字段中最多选择一个字段使用.
+
+在此处, 我们增加了一个新的字段--其它的联系方式, 可以从腾讯家的这两个软件中任选一个
+
+![image-20251124145315601](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251124145315601.png)
+
+注意, 不要自找麻烦, `othof`类型子选项不能是数组.
+
+![image-20251124152214631](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251124152214631.png)
+
+除了`qq, wechat`的常规接口外, 还有`other_contact_case()`接口, 该接口可以以枚举类型的形式返回当前使用的字段是谁, 如果重复设置, 以最后一次设置为准.
+
+![image-20251124152602645](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251124152602645.png)
+
+`OTHER_CONTACT_NOT_SET`就是谁也没设置
+
+![image-20251124154355392](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251124154355392.png)
+
+![image-20251124154414825](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251124154414825.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build .
+ninja: no work to do.
+[wind@Ubuntu build]$ cp ../../contacts2.2/build/contacts.bin .
+[wind@Ubuntu build]$ ./demo 1
+正在添加一个新的联系人: 
+请输入联系人的姓名: 俾斯麦
+请输入年龄: 85
+请输入联系人电话号码, 直接回车结束记录, 第1份: 88327115
+您输入的电话号码类型是: 1.移动电话, 2.固定电话2
+请输入联系人电话号码, 直接回车结束记录, 第2份: 
+请输入联系人地址: 铁血
+请选择其它的备用联系方式: 1. qq  2. 微信 2
+请输入微信号: 19415271040
+一个新的联系人已经添加
+[wind@Ubuntu build]$ ./demo 2
+联系人姓名: 赤城
+联系人年龄: 100
+第1份电话号码: 83425, 类型: MP
+
+联系人姓名: 企业
+联系人年龄: 89
+第1份电话号码: 731820514, 类型: MP
+
+联系人姓名: 欧根亲王
+联系人年龄: 87
+第1份电话号码: 830194671, 类型: MP
+联系人地址: 铁血
+
+联系人姓名: 俾斯麦
+联系人年龄: 85
+第1份电话号码: 88327115, 类型: TEL
+联系人地址: 铁血
+备用微信联系方式: 19415271040
 [wind@Ubuntu build]$ 
 ```
 
