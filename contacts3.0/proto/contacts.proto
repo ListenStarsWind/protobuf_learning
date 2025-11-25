@@ -1,0 +1,13 @@
+edition = "2024";
+
+package contacts;
+
+message People{
+    string name = 1;
+    uint32 age = 2;
+    repeated string phones = 3;
+}
+
+message Contacts{
+    repeated People contacts = 1;
+}
