@@ -343,7 +343,23 @@ contacts.pb.cc  contacts.pb.h
 
 `protobuf` 的二进制流也是一个优点, 相比 `json xml`来说, 二进制不可读, 所以传输内容在天然上就有一定的破解成本.
 
-这里我就不贴命令行生成指令, 太长了,  还是让 `cmake` 根据 config 文件自己判断吧, 下面是 `CMakeLists.txt`的内容
+这里我就不贴命令行生成指令, 太长了,  还是让 `cmake` 根据 config 文件自己判断吧, 下面是配套的项目路径和 `CMakeLists.txt, fix-proto-dep.cmake`的内容
+
+```shell
+[wind@Ubuntu contacts2.4]$ tree .
+.
+├── build
+├── CMakeLists.txt
+├── fix-proto-dep.cmake
+├── include
+├── proto
+│   ├── contacts.proto
+└── src
+    └── main.cc
+
+5 directories, 5 files
+[wind@Ubuntu contacts2.4]$ 
+```
 
 ```cmake
 # 最低 cmake 版本要求
@@ -351,7 +367,7 @@ cmake_minimum_required(VERSION 3.22)
 project(ContactsDemo LANGUAGES CXX)
 
 # ==============================================================================
-# 1. 强制用 Clang-21 + libc++（避免跑偏）
+# 1. 强制用 Clang-21 + libc++
 # ==============================================================================
 if (DEFINED ENV{CXX})
     set(CMAKE_CXX_COMPILER $ENV{CXX})
@@ -381,7 +397,7 @@ find_package(absl CONFIG REQUIRED)
 find_package(Protobuf CONFIG REQUIRED)
 
 # ==============================================================================
-# 3. 自己控制 protoc 生成流程（稳定，可追踪依赖）
+# 3. 手动调用 protoc 控制生成流程 
 # ==============================================================================
 set(PROTO_DIR "${CMAKE_SOURCE_DIR}/proto")
 set(PROTO_GEN_DIR "${CMAKE_BINARY_DIR}/gen/proto")
@@ -402,12 +418,12 @@ foreach(proto_rel IN LISTS PROTO_FILES)
     get_filename_component(proto_dir  "${proto_rel}" DIRECTORY)      # 可能的子目录
     get_filename_component(proto_name "${proto_rel}" NAME_WE)        # 不带后缀名
 
-    set(abs_proto "${PROTO_DIR}/${proto_rel}")
     set(out_dir   "${PROTO_GEN_DIR}/${proto_dir}")
     set(out_cc    "${out_dir}/${proto_name}.pb.cc")
     set(out_h     "${out_dir}/${proto_name}.pb.h")
+    set(dep_file "${out_cc}.d") # cmake protobuf 源文件依赖描述文件
 
-    # 输出目录先建好
+    # 确保输出目录
     file(MAKE_DIRECTORY "${out_dir}")
 
     add_custom_command(
@@ -415,14 +431,17 @@ foreach(proto_rel IN LISTS PROTO_FILES)
         COMMAND protobuf::protoc
                 --cpp_out=${PROTO_GEN_DIR}
                 --proto_path=${PROTO_DIR}
-                --dependency_out=${out_cc}.d
-                "${abs_proto}"
-        COMMAND ${CMAKE_COMMAND} -E sleep 0   # 避免时间戳偶尔不对
-        DEPENDS "${abs_proto}" protobuf::protoc
-        DEPFILE "${out_cc}.d"                 # protoc 的 .d 用来做依赖跟踪
-        COMMENT "protoc 生成: ${proto_rel}"
+                --dependency_out=${dep_file}
+                "${PROTO_DIR}/${proto_rel}"
+        COMMAND ${CMAKE_COMMAND} -E cmake_echo_color --blue --bold "Fixing depfile paths: ${dep_file}"
+        COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/fix-proto-dep.cmake"
+                "${dep_file}" "${CMAKE_SOURCE_DIR}"
+        DEPENDS "${PROTO_DIR}/${proto_rel}" protobuf::protoc
+        DEPFILE "${dep_file}"                          # 让 CMake 自动读取这个 .d 文件
+        COMMENT "protoc → ${proto_rel}"
         VERBATIM
-    ) 
+        USES_TERMINAL
+    )
 
     list(APPEND PROTO_SRCS "${out_cc}")
     list(APPEND PROTO_HDRS "${out_h}") 
@@ -461,6 +480,29 @@ message(STATUS " 生成目录      : ${PROTO_GEN_DIR}")
 message(STATUS " 可执行文件    : demo")
 message(STATUS "==================================================")
 message(STATUS "")
+
+```
+
+```shell
+# fix-proto-dep.cmake
+# 用法: cmake -P fix-proto-dep.cmake <depfile> <source_dir>
+
+set(depfile "${ARGV0}")
+set(src_dir "${ARGV1}")
+
+if(NOT EXISTS "${depfile}")
+    return()
+endif()
+
+file(READ "${depfile}" content)
+
+# 把所有 ${src_dir}/ 开头的绝对路径替换成相对路径
+string(REPLACE "${src_dir}/" "" relative_content "${content}")
+
+# 可选：把 Windows 反斜杠也统一成正斜杠（更干净）
+string(REPLACE "\\" "/" relative_content "${relative_content}")
+
+file(WRITE "${depfile}" "${relative_content}")
 
 ```
 
@@ -757,7 +799,9 @@ build.ninja  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.j
 [wind@Ubuntu build]$ 
 ```
 
-我们看到一个特别的现象是, 原先的"2.0"版本根本没有类型, 但在这里, 我们却读出了类型, 这就和枚举类型的默认值有关, 新版本的`protobuf`会对之前老版本二进制流中不存在的字段取为默认值, 对于枚举类型来说, 就是枚举值为0那个, 所以在这里, "赤城" 也能看到电话号码类型
+我们看到一个特别的现象是, 原先的"2.0"版本根本没有类型, 但在这里, 我们却读出了类型, 这就和枚举类型的默认值有关, 新版本的`protobuf`会对之前老版本二进制流中不存在的字段取为默认值, 对于枚举类型来说, 就是枚举值为0的那个, 所以在这里, "赤城" 也能看到电话号码类型
+
+如果不存在的字段是更加复杂的自定义类型, 则主要取决于语言所对应该类型的具体实现, 比如对于容器来说, 一般就是一个空的容器..
 
 ## 通讯录 2.2
 
@@ -889,6 +933,293 @@ ninja: no work to do.
 备用微信联系方式: 19415271040
 [wind@Ubuntu build]$ 
 ```
+
+## 通讯录 2.4
+
+接下来, 我们为联系人增加一个 `map` 类型字段, 用来作为备注信息.
+
+![image-20251125140323737](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125140323737.png)
+
+关于这里的 `map` 有一些要点需要注意.
+
+首先是 `key` 类型的范围, 它被要求是一个数值精确, 稳定, 可以被哈希比较的类型, 由于正例比较多, 这里我们举反例, 浮点类型由于不够精确所以不可以作为 `key` 类型, 字节数组 `bytes` 和 ` message` 则不可以哈希比较, 所以也不支持. 枚举类型理论上确实可以用值进行比较, 但它们的大小比较没有实际意义, 也是不行的.  这样的话, 支持的类型就大概是通讯录 1.0 类型表上去掉浮点类型后剩下的.
+
+`map` 类型不能被  `repeated` 修饰, 并且它是无序 `map`, 没有顺序保证.
+
+这新增的接口并没有什么要说的点
+
+![image-20251125142254641](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125142254641.png)
+
+![image-20251125150503880](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125150503880.png)
+
+![image-20251125150522972](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125150522972.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build .
+ninja: no work to do.
+[wind@Ubuntu build]$ cp ../../contacts2.3/build/contacts.bin .
+[wind@Ubuntu build]$ ./demo 1
+正在添加一个新的联系人: 
+请输入联系人的姓名: 加贺 
+请输入年龄: 104
+请输入联系人电话号码, 直接回车结束记录, 第1份: 913424855
+您输入的电话号码类型是: 1.移动电话, 2.固定电话2
+请输入联系人电话号码, 直接回车结束记录, 第2份: 
+请输入联系人地址: 重樱
+请选择其它的备用联系方式: 1. qq  2. 微信 2
+请输入微信号: 194265
+正在为联系人添加备注信息, 备注信息由两部分组成, 如果你想完成信息添加, 请在第一部分中直接回车
+请输入备注的标题信息(第一部分): 1932
+请输入备注的内容信息(第二部分): 她参与过一·二八事变
+请输入备注的标题信息(第一部分): 
+一个新的联系人已经添加
+[wind@Ubuntu build]$ ./demo 2
+联系人姓名: 赤城
+联系人年龄: 100
+第1份电话号码: 83425, 类型: MP
+
+联系人姓名: 企业
+联系人年龄: 89
+第1份电话号码: 731820514, 类型: MP
+
+联系人姓名: 欧根亲王
+联系人年龄: 87
+第1份电话号码: 830194671, 类型: MP
+联系人地址: 铁血
+
+联系人姓名: 俾斯麦
+联系人年龄: 85
+第1份电话号码: 88327115, 类型: TEL
+联系人地址: 铁血
+备用微信联系方式: 19415271040
+联系人姓名: 加贺
+联系人年龄: 104
+第1份电话号码: 913424855, 类型: TEL
+联系人地址: 重樱
+备用微信联系方式: 194265备注信息标题: 1932, 备注信息内容: 她参与过一·二八事变
+
+[wind@Ubuntu build]$ 
+```
+
+看来应该在备用联系方式后面换一个行
+
+## 通讯录 3.0
+
+在通讯录 3.0 中, 我们将把视角聚焦于 `.proto` 源文件的更新策略. 看看其中有哪些需要注意的要点. 
+
+对于文件的更新, 总的来说, 可以分类为新增和删减这两种. 
+
+其实在上面的一系列过程中, 我们就一直在更新之前的源文件. 所以在这个方面, 我们就不做具体代码示例了, 对于原先旧的二进制流中, 不存在的字段, 在一开始我们已经说过, 它们会直接使用对象实例化出来的那个默认值, 对于标量来说, 就是编译器本就支持的, 那张类型表上的类型来说, 它们就会使用各自的默认值.
+
+而对于更为复杂的类型来说, 比如 message 来说, 则要看语言使用的具体底层类的行为, 数组读不出来就是默认的空数组, 枚举读不到就是默认的开头值为0的那个常量.
+
+另外, 对于字段编号的选择, 应该避免和已经使用或者曾经使用的编号引发冲突, 在一开始, 我就说过, 序列化后的二进制流对于每个字段采用的是编号和字段值这种 pair 形式, 因此, 如果你使用了曾经用过的编号, 另一边可能因为某些原因没有及时更新, 从而把新的值映射到原先旧的那个字段上, 之后我们会在删减上用代码实际演示现象.
+
+除了简单的直接新增之外, 也许你还会对原先的字段类型进行修改, 此时就需要注意不同类型之间序列化和反序列化方式是否是兼容的.
+
+其中, `int32, uint32, int64, uint64, bool` 在序列化和反序列化方面是完全兼容的, 但是需要注意一下语言层, 比如, `int, uint`之前有明显的正负之分, 如果原先`int`的二进制流中使用的是负数值, 现在换成`uint`了, 那就可能会变成一个很大的值, 当然还有`32, 64`之分, `64`位往`32`里面放, 自然会发生截断现象, 反过来倒没什么.
+
+`sint`们做另一桌, 和其他整型不兼容; `fixed`和`sfixed`在相同位数的情况下是相互兼容的.
+
+ 对于`oneof`来说, 你可以在原来字段也在可选项中的前提下用`oneof`平替它;  若确定在代码的具体使用过程中, 对于一个消息, 明明有多个字段, 可你总是只使用其中一个字段的前提下, 你也可以把这批字段统一放进一个`oneof`中; 不能把原先就存在的字段移到也原先存在的`oneof`中.
+
+下面就是有关删减的项目代码了, 在这里, 我采用的全新的项目层次布局, 下面是具体内容
+
+```shell
+[wind@Ubuntu contacts3.0]$ tree .
+.
+├── build
+├── CMakeLists.txt
+├── fix-proto-dep.cmake
+├── include
+│   ├── client
+│   └── server
+├── proto
+│   └── contacts.proto
+└── src
+    ├── client
+    │   └── main.cc
+    └── server
+        └── main.cc
+
+9 directories, 5 files
+[wind@Ubuntu contacts3.0]$
+```
+
+```shell
+[wind@Ubuntu contacts3.0]$ cat CMakeLists.txt 
+cmake_minimum_required(VERSION 3.22)
+project(ContactsDemo LANGUAGES CXX)
+
+# ==============================================================================
+# 1. 使用 Clang-21 + libc++（保持我们的默认工具链）
+# ==============================================================================
+if (DEFINED ENV{CXX})
+    set(CMAKE_CXX_COMPILER $ENV{CXX})
+else()
+    set(CMAKE_CXX_COMPILER clang++-21)
+endif()
+if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "需要用 Clang 21 + libc++ 编译：export CXX=clang++-21")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+add_compile_options("-stdlib=libc++")
+add_link_options("-stdlib=libc++" "-lc++abi")
+message(STATUS "Clang 21 + libc++ 已启用")
+
+# ==============================================================================
+# 2. 查找依赖（选择我们本地编译的依赖）
+# ==============================================================================
+list(PREPEND CMAKE_PREFIX_PATH "/opt/libcxx-pkgs")
+find_package(absl CONFIG REQUIRED)
+find_package(Protobuf CONFIG REQUIRED)
+
+# ==============================================================================
+# 3. 生成 protobuf 代码（支持自定义生成目录，也兼容相对路径）
+# ==============================================================================
+function(add_protobuf_generation)
+    cmake_parse_arguments(ARG "" "GEN_ROOT;PROTO_DIR" "" ${ARGN})
+
+    if(NOT ARG_GEN_ROOT OR NOT ARG_PROTO_DIR)
+        message(FATAL_ERROR "add_protobuf_generation() 需要提供 GEN_ROOT 和 PROTO_DIR")
+    endif()
+
+    set(proto_gen_dir "${ARG_GEN_ROOT}/proto")
+    file(MAKE_DIRECTORY "${proto_gen_dir}")
+
+    file(GLOB_RECURSE proto_files RELATIVE "${ARG_PROTO_DIR}" "${ARG_PROTO_DIR}/*.proto")
+    if(NOT proto_files)
+        message(FATAL_ERROR "在 ${ARG_PROTO_DIR} 里没有找到 .proto 文件")
+    endif()
+
+    set(generated_srcs "")
+    set(generated_hdrs "")
+
+    foreach(proto_rel IN LISTS proto_files)
+        get_filename_component(proto_dir  "${proto_rel}" DIRECTORY)
+        get_filename_component(proto_name "${proto_rel}" NAME_WE)
+
+        set(out_dir "${proto_gen_dir}/${proto_dir}")
+        set(out_cc  "${out_dir}/${proto_name}.pb.cc")
+        set(out_h   "${out_dir}/${proto_name}.pb.h")
+        set(dep_file "${out_cc}.d")
+
+        file(MAKE_DIRECTORY "${out_dir}")
+
+        add_custom_command(
+            OUTPUT  "${out_cc}" "${out_h}"
+            COMMAND protobuf::protoc
+                    --cpp_out=${proto_gen_dir}
+                    --proto_path=${ARG_PROTO_DIR}
+                    --dependency_out=${dep_file}
+                    "${ARG_PROTO_DIR}/${proto_rel}"
+            # 将 protoc 生成的依赖引导文件解析为相对路径
+            COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/fix-proto-dep.cmake"
+                    "${dep_file}" "${CMAKE_SOURCE_DIR}"
+            DEPENDS "${ARG_PROTO_DIR}/${proto_rel}" protobuf::protoc
+            DEPFILE "${dep_file}"
+            COMMENT "protoc → ${proto_rel}"
+            VERBATIM
+            USES_TERMINAL
+        )
+
+        list(APPEND generated_srcs "${out_cc}")
+        list(APPEND generated_hdrs "${out_h}")
+    endforeach()
+
+    # 让外层也能拿到生成结果
+    set(PROTOBUF_GENERATED_SRCS ${generated_srcs} PARENT_SCOPE)
+    set(PROTOBUF_GENERATED_HDRS ${generated_hdrs} PARENT_SCOPE)
+    set(PROTOBUF_GEN_ROOT       ${ARG_GEN_ROOT}   PARENT_SCOPE)
+endfunction()
+
+# ==============================================================================
+# 4. 添加可执行文件（server / client 共用相同结构）
+# ==============================================================================
+function(add_contacts_executable target_name src_main)
+    add_executable(${target_name}
+        "${src_main}"
+        ${PROTOBUF_GENERATED_SRCS}
+        ${PROTOBUF_GENERATED_HDRS}
+    )
+
+    target_include_directories(${target_name} PRIVATE
+        ${PROTOBUF_GEN_ROOT}                    # 生成的头文件根目录
+        "${CMAKE_SOURCE_DIR}/include"           # 公共头文件
+        "${CMAKE_SOURCE_DIR}/include/${target_name}"  # 每个模块自己的头文件
+    )
+
+    target_link_libraries(${target_name} PRIVATE
+        protobuf::libprotobuf
+        absl::strings
+        absl::log
+    )
+
+    message(STATUS "已添加可执行目标 → ${target_name} (入口: ${src_main})")
+endfunction()
+
+# ==============================================================================
+# 5. 主流程：先生成 proto，再创建 server / client
+# ==============================================================================
+add_protobuf_generation(
+    GEN_ROOT   "${CMAKE_BINARY_DIR}/gen"
+    PROTO_DIR  "${CMAKE_SOURCE_DIR}/proto"
+)
+
+add_contacts_executable(server "src/server/main.cc")
+add_contacts_executable(client "src/client/main.cc")
+
+# ==============================================================================
+# 6. 输出一些编译信息，便于查看
+# ==============================================================================
+message(STATUS "")
+message(STATUS "==================================================")
+message(STATUS " 项目           : ${PROJECT_NAME}")
+message(STATUS " 编译器         : ${CMAKE_CXX_COMPILER} (${CMAKE_CXX_COMPILER_ID})")
+message(STATUS " 标准库         : libc++")
+message(STATUS " Proto 输出目录 : ${PROTOBUF_GEN_ROOT}")
+message(STATUS " 目标可执行文件 : server、client")
+message(STATUS " 构建示例       : cmake --build build --target server")
+message(STATUS "                 : cmake --build build --target client")
+message(STATUS "==================================================")
+message(STATUS "")
+[wind@Ubuntu contacts3.0]$ 
+```
+
+```shell
+[wind@Ubuntu contacts3.0]$ cat fix-proto-dep.cmake 
+# fix-proto-dep.cmake
+# 用法: cmake -P fix-proto-dep.cmake <depfile> <source_dir>
+
+set(depfile "${ARGV0}")
+set(src_dir "${ARGV1}")
+
+if(NOT EXISTS "${depfile}")
+    return()
+endif()
+
+file(READ "${depfile}" content)
+
+# 把所有 ${src_dir}/ 开头的绝对路径替换成相对路径
+string(REPLACE "${src_dir}/" "" relative_content "${content}")
+
+# 可选：把 Windows 反斜杠也统一成正斜杠（更干净）
+string(REPLACE "\\" "/" relative_content "${relative_content}")
+
+file(WRITE "${depfile}" "${relative_content}")
+[wind@Ubuntu contacts3.0]$ 
+```
+
+关于新的项目, 我有几点需要强调, 首先我将 `proto` 源文件夹移到了根目录下, 这更符合 C++ 社区的一般习惯, 另外, 和原先一样, `pb` 文件会被放在`build/gen/proto`目录下, 但是, 在之前, 我们直接把`gen/proto`作为头文件搜索目录添加进去, 但这次, 我把头文件目录改为了`gen`, 我认为这样是更加恰当的, 不过这意味着我们包含`protoc`生成的头文件需要带上`proto/`的前缀. 另外, 尽管我们写了 `server, client`, 但为了节省时间, 也是为了降低门槛, 实际代码中, 我们就不手写套接字了, 也就是不真正地网络通信, 而还是像以前那样, 用硬盘作为中间媒介.
+
+在`contacts.proto`中, 我们进行了简化, 因为在这里各种类型的使用不是重点
+
+![image-20251125200158537](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125200158537.png)
 
 
 
