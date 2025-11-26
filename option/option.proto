@@ -1,0 +1,14 @@
+edition = "2024";
+
+option optimize_for = LITE_RUNTIME;
+
+enum Phone{
+  option allow_alias = true;
+  MP = 0;
+  TEL = 1;
+  LANDLINE = 1;
+}
+
+message People{
+  string name  = 1;
+}
