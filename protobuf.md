@@ -1221,6 +1221,423 @@ file(WRITE "${depfile}" "${relative_content}")
 
 ![image-20251125200158537](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125200158537.png)
 
+```shell
+[wind@Ubuntu build]$ cat ../src/server/main.cc 
+#include <unistd.h>
+
+#include <format>
+#include <fstream>
+#include <limits>
+#include <string>
+
+#include "proto/contacts.pb.h"
+
+int main() {
+    using namespace std;
+    using namespace contacts;
+
+    string fName = "contacts.bin";
+    string fTName = fName + ".temp";
+
+    fstream input(fName.c_str(), ios::in | ios::binary);
+
+    Contacts contacts;
+    if (!input) {
+        cout << "配置文件不存在, 将自动创建\n";
+    } else {
+        if (!contacts.ParseFromIstream(&input)) {
+            cout << "通讯录初始化失败\n";
+            // 生命周期结束, 自动析构并关闭文件
+            return 1;
+        }
+    }
+
+    auto people = contacts.add_contacts();
+
+    cout << "开始添加新联系人: \n";
+    cout << "请依据提示, 依次输入新联系人的姓名, 年龄, 联系电话 \n";
+
+    uint32_t age;
+    string name, phone;
+
+    cout << "请输入新联系人的姓名: ";
+    getline(cin, name);
+
+    cout << "请输入新联系人的年龄: ";
+    cin >> age;
+
+    // 一直读取整型与换行之前的杂项内容, 包括换行本身
+    cin.ignore(numeric_limits<streamsize>::max(), '\n');
+
+    cout << "请输入新联系人的电话号码, 支持多个号码保存, 如果确认, 请直接回车\n";
+    for (int i = 0;; ++i) {
+        cout << format("第{}个: ", i + 1);
+        getline(cin, phone);
+        if (phone.empty()) break;
+        people->add_phones(phone);
+    }
+
+    people->set_name(name);
+    people->set_age(age);
+
+    cout << "一个新的联系人已经添加成功\n";
+
+    fstream output(fTName.c_str(), ios::out | ios::binary | ios::trunc);
+
+    if (!contacts.SerializePartialToOstream(&output)) {
+        cout << "数据持久化失败";
+        return 2;
+    }
+
+    ::rename(fTName.c_str(), fName.c_str());
+    return 0;
+}[wind@Ubuntu build]$ cat ../src/client/main.cc 
+#include <format>
+#include <fstream>
+#include <string>
+
+#include "proto/contacts.pb.h"
+
+int main() {
+    using namespace std;
+    using namespace contacts;
+
+    string fName = "contacts.bin";
+
+    fstream input(fName.c_str(), ios::in | ios::binary);
+
+    if (!input) {
+        cout << "中间媒介不存在, 反序列化无法进行\n";
+        return 1;
+    }
+
+    Contacts contacts;
+    if (!contacts.ParseFromIstream(&input)) {
+        cout << "反序列化有误, 将停止程序\n";
+        return 2;
+    }
+
+    input.close();
+
+    auto size = contacts.contacts_size();
+    for (int i = 0; i < size; ++i) {
+        cout << format("----------联系人{}----------\n", i + 1);
+        auto people = contacts.contacts(i);
+        cout << format("姓名: {}\n", people.name());
+        cout << format("年龄: {}\n", people.age());
+        int phones_size = people.phones_size();
+        for (int j = 0; j < phones_size; ++j) {
+            cout << format("电话{}: {} \n", j + 1, people.phones(j));
+        }
+        cout << endl;
+    }
+
+    return 0;
+}[wind@Ubuntu build]$ 
+```
+
+我们的实验策略是, 首先更改 `proto` 源文件, 然后, 仅重新编译`server`, `client`则保持旧版本, 以此模拟因为客户端不更新沿用旧的代码时所产生的现象.
+
+```shell
+[wind@Ubuntu build]$ cmake --build . # 两个程序一并编译
+ninja: no work to do.
+[wind@Ubuntu build]$ ls
+build.ninja  client  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.json  gen  server
+[wind@Ubuntu build]$ 
+```
+
+现在, 我们在 `proto` 源文件中将原先的年龄字段在语义层面重新修改(就是换个面向人的字段名, 所以语义改变了, 但面向机器的字段编号不变)
+
+![image-20251125211259398](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125211259398.png)
+
+![image-20251125211247955](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125211247955.png)
+
+![image-20251125211317269](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125211317269.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build . --target server # 只重新编译服务端
+[0/4] protoc → contacts.proto
+[4/4] Linking CXX executable server
+[wind@Ubuntu build]$ ./server 
+配置文件不存在, 将自动创建
+开始添加新联系人: 
+请依据提示, 依次输入新联系人的姓名, 生日, 联系电话 
+请输入新联系人的姓名: 张三
+请输入新联系人的生日: 229
+请输入新联系人的电话号码, 支持多个号码保存, 如果确认, 请直接回车
+第1个: 12345
+第2个: 
+一个新的联系人已经添加成功
+[wind@Ubuntu build]$ ./client 
+----------联系人1----------
+姓名: 张三
+年龄: 229
+电话1: 12345 
+
+[wind@Ubuntu build]$ 
+```
+
+现在, 我们就能明显发现, 新的 `server` 和旧的 `client` 就 "2" 这个字段有了分歧, 我们输入端认为是生日, 但另一个读端则认为是年龄.
+
+在前面我也说过, 添加新字段的时候, 不应该使用正在使用或者曾经使用的字段编号. 但如果光靠人肉眼检查比较麻烦, 能不能把检查这个任务交给机器呢? 当然是可以的, `protobuf` 中有关键字 `reserved`, 可以将某个编号设置为"保留编号", 也可以将某个名字设置为"保留名字", 这样, 当重新使用保留编号或者保留名字的时候, 在 `protoc` 这里就会编译不通过.
+
+![image-20251125212727584](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125212727584.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build . --target server # 只重新编译服务端
+[0/4] protoc → contacts.proto
+/home/wind/protobuf_learning/contacts3.0/proto/contacts.proto:6:14: Field "birthday" uses reserved number 2.
+/home/wind/protobuf_learning/contacts3.0/proto/contacts.proto:6:14: Suggested field numbers for contacts.People: 4
+FAILED: gen/proto/contacts.pb.cc gen/proto/contacts.pb.h /home/wind/protobuf_learning/contacts3.0/build/gen/proto/contacts.pb.cc /home/wind/protobuf_learning/contacts3.0/build/gen/proto/contacts.pb.h 
+cd /home/wind/protobuf_learning/contacts3.0/build && /opt/libcxx-pkgs/bin/protoc-34.0.0 --cpp_out=/home/wind/protobuf_learning/contacts3.0/build/gen/proto --proto_path=/home/wind/protobuf_learning/contacts3.0/proto --dependency_out=/home/wind/protobuf_learning/contacts3.0/build/gen/proto//contacts.pb.cc.d /home/wind/protobuf_learning/contacts3.0/proto/contacts.proto && /usr/bin/cmake -P /home/wind/protobuf_learning/contacts3.0/fix-proto-dep.cmake /home/wind/protobuf_learning/contacts3.0/build/gen/proto//contacts.pb.cc.d /home/wind/protobuf_learning/contacts3.0 && /usr/bin/cmake -E cmake_transform_depfile Ninja gccdepfile /home/wind/protobuf_learning/contacts3.0 /home/wind/protobuf_learning/contacts3.0 /home/wind/protobuf_learning/contacts3.0/build /home/wind/protobuf_learning/contacts3.0/build /home/wind/protobuf_learning/contacts3.0/build/gen/proto/contacts.pb.cc.d /home/wind/protobuf_learning/contacts3.0/build/CMakeFiles/d/bd8e4d5aa94056246f7e30c2d30f737712ed7bcb1d07db378986d0a9a3418063.d
+ninja: build stopped: subcommand failed.
+[wind@Ubuntu build]$ 
+```
+
+第一行的报错就提示, `birthday` 使用了被保留的数字
+
+此时, 我们再改成未曾使用的 "4" 作为编号
+
+注: `proto3`语法, `age` 是要带双引号的.
+
+![image-20251125213842927](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251125213842927.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build . --target server # 只重新编译服务端
+[0/4] protoc → contacts.proto
+[4/4] Linking CXX executable server
+[wind@Ubuntu build]$ ./server 
+开始添加新联系人: 
+请依据提示, 依次输入新联系人的姓名, 生日, 联系电话 
+请输入新联系人的姓名: 李四
+请输入新联系人的生日: 15
+请输入新联系人的电话号码, 支持多个号码保存, 如果确认, 请直接回车
+第1个: 14680
+第2个: 
+一个新的联系人已经添加成功
+[wind@Ubuntu build]$ ./client 
+----------联系人1----------
+姓名: 张三
+年龄: 229
+电话1: 12345 
+
+----------联系人2----------
+姓名: 李四
+年龄: 0
+电话1: 14680 
+
+[wind@Ubuntu build]$ 
+```
+
+此处, 旧的 `client` 由于没有接收到 `2` 字段, 所以使用了默认值. (之前那个用的是以前的二进制流, 所以还是这样)
+
+另外, `reserved` 也可以批量保留编号 `reserved 100 to 200;`
+
+----
+
+在上面的通讯录 3.0 中, 可以确定的是最新的服务端确实保存了新联系人的用户信息, 并将其序列化到了硬盘上, 但是老版的客户端有没有保存这些对他来说, 可以算得上是"无效未知"的数据呢? 
+
+这要视 `protobuf` 的具体版本而定, 在 `3.5` 前, 它不会保存未知字段, 而在之后, 就会保存到特定位置并提供特定接口进行访问, 对于我们使用的版本来说, 已经远远高于 `3.5` 了, 所以, 会保存无效字段.
+
+对于未知字段的访问方法, 则需要结合 `protobuf` 的复用结构来看
+
+![image-20251126144810579](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251126144810579.png)
+
+我们看到, `Message` 一方面从`MessageLite`那里继承到了最为基本的序列化和反序列化能力, 另一方面, `Descriptor`的使用, 为其添加了对自定义消息进行语义描述的能力(比如, 获取自定义消息的名字, 所有字段的描述), `Reflection` 负责提供字段读写的动态方法(就是同一个接口, 通过参数的不同, 能够实现对所有字段的访问, 我们之前用的是静态读写方法), 其中也包括对于未知字段的读写.
+
+`Reflection` 中的`GetUnknownFields`, 则可以获取`UnknownFieldSet`, 其中保存了一批未知字段, 我们可以将其中的单个未知字段用`field`获取, 而`UnknownField` 内部又会依据二进制流的特点, 将字段的基本类型进行大类上的细分
+
+![image-20251126151906079](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251126151906079.png)
+
+ `number` 可以把字段编号拿出来, `Type` 返回字段类型, `VARINT`表示可变长度整数, 包括 `int, uint, bool, enum`, `FIXED32` 表示定长32类, 包括 `fixed32, sfixed32, float`, `FIXED64` 定长64大类, 包括 `fixed64, sfixed64, double`, `LENGTH_DELIMITED`由长度, 内容组合成的通用类型, 包括`string, bytes, message, packed repeated`, `packed repeated`是被压缩的数组, 他把数组中的元素按顺序展开, 但单个元素不会再注明下标, 而只会注明总元素大小, 从而避免下标引发的空间资源浪费. `GROUP` 更老版本的 `protobuf` 类型, 可以认为已经不用了. 我们需要使用对应类型的接口, 才能把他们的值进行读写.
+
+下面我们将用代码实际演示一下. 我们的思路是, 先将 `proto` 源文件回退到最早的版本, 然后对 `client` 进行修改, 增加对未知字段的访问, 然后只编译客户端, 读取之前的二进制文件.
+
+![image-20251126154844404](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251126154844404.png)
+
+![image-20251126154900091](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251126154900091.png)
+
+```shell
+[wind@Ubuntu build]$ cmake --build . --target client # 只重新编译客户端
+[0/4] protoc → contacts.proto
+[4/4] Linking CXX executable client
+[wind@Ubuntu build]$ ./client 
+----------联系人1----------
+姓名: 张三
+年龄: 229
+电话1: 12345 
+
+----------联系人2----------
+姓名: 李四
+年龄: 0
+电话1: 14680 
+字段编号: 4, 内容: 15
+
+----------联系人3----------
+姓名: 王五
+年龄: 0
+电话1: 12678 
+字段编号: 4, 内容: 1020
+
+[wind@Ubuntu build]$ 
+```
+
+----
+
+在计算机界, 有前后兼容的概念, 结合`protobuf` 这个具体例子来说, 向前兼容指的是老模块能够正确识别新模块生成或者发出的协议, 新增加的字段会以未知字段的形式继续保存下来, 向后兼容指的是新模块能够正确识别老模块生成或者发出的协议. 前后兼容可以确保一个不能同时更新的分布式系统不会因为更新不同步导致灾难性问题.
+
+----
+
+在 `protobuf`源文件中, 我们可以使用 `option` 选项控制 `protoc` 的编译细节, 按照控制层次, 分为文件级, 字段级, 消息级等
+
+比如这里, 在默认情况下, 它继承的是 `Message`, 但我们设置功能开关后, 就变成了`MessageLite`.
+
+```shell
+[wind@Ubuntu option]$ vim option.proto 
+[wind@Ubuntu option]$ cat option.proto 
+edition = "2024";
+
+//option optimize_for = LITE_RUNTIME;
+
+message People{
+  string name  = 1;
+}
+[wind@Ubuntu option]$ /opt/libcxx-pkgs/bin/protoc --cpp_out=. option.proto
+[wind@Ubuntu option]$ grep -n "class People" option.pb.h
+55:class People;
+70:class People final : public ::google::protobuf::Message
+[wind@Ubuntu option]$ # 把注释去掉
+[wind@Ubuntu option]$ vim option.proto 
+[wind@Ubuntu option]$ /opt/libcxx-pkgs/bin/protoc --cpp_out=. option.proto
+[wind@Ubuntu option]$ grep -n "class People" option.pb.h
+49:class People;
+64:class People final : public ::google::protobuf::MessageLite
+[wind@Ubuntu option]$ 
+```
+
+`optimize_for` 是一种常用选项, 用于控制生成文件细节, 主要是在优化级别方面:
+
+- `SPEED`, 这是`protoc`的默认选择, 此时, 生成的代码是⾼度优化的, 代码运行效率高, 但是空间占用较大
+- `LITE_RUNTIME`, 不需要完整的`proto`功能, 只需要最核心的序列化, 反序列化, 字段静态读写方法, 以达到服务的轻量化, 效率高的同时空间也较小
+- `CODE_SIZE`, 用时间换空间, 效率低, 但空间最小, 适用于资源及其紧张的设备.
+
+`allow_alias` 也是另一种常用的选项, 有`true, false`两种选择, 默认`false`, 表示不许同一个字段编号有多个字段名, 开启后, 同一个编号的字段可以有多个名字, 实现别名的效果.
+```shell
+[wind@Ubuntu option]$ vim option.proto 
+[wind@Ubuntu option]$ cat option.proto 
+edition = "2024";
+
+option optimize_for = LITE_RUNTIME;
+
+enum Phone{
+  option allow_alias = true;
+  MP = 0;
+  TEL = 1;
+  LANDLINE = 1;
+}
+
+message People{
+  string name  = 1;
+}
+[wind@Ubuntu option]$ /opt/libcxx-pkgs/bin/protoc --cpp_out=. option.proto
+[wind@Ubuntu option]$ # 没有报字段编号重复的错误
+```
+
+`ProtoBuf` 也允许⾃定义选项并使⽤, 但对于我们来说, 用不上, 不说了.
+
+## 网络通讯录
+
+在通讯录 4.0 中, 我们将真正使用网络进行进程间的信息交互.
+
+客户端可以选择对通讯录进行以下操作:
+
+- 新增一个联系人
+- 删除一个联系人
+- 查询通讯列表
+- 查询一个联系人的详细信息
+
+服务端将提供上述服务, 并对联系人信息进行持久化操作.
+
+为了降低成本和门槛, 我们在这里就不纯手写套接字了, 而是使用一个头文件级别的开源库, 叫做`Httplib`, 只需要包含`httplib.h`, 并连接上原生线程库`pthread`即可直接使用.
+
+你可以直接获取它
+
+```shell
+wget https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
+```
+
+针对客户端的每个特定功能, 服务端都有对应的后台接口可以完整实际操作, 而它们, 正是依靠对应的 `message` 来进行通信的. 当用户选择了一个特定的功能时, 它会收集用户输入的信息, 将其序列化为请求负载, 再通过`Httplib`实际发送到对端, 对端对负载反序列化后, 调用对应的逻辑接口, 并把结果再一次序列化, 形成应答负载, 通过`Httplib`传送回去.
+
+四个功能, 每个请求, 应答各一个 `message`, 这样差不多要写八个`message`, 不过我们实际上只把第一个功能实现一下, 其它的都差不多, 所以就不写了.  
+
+```shell
+[wind@Ubuntu contacts4.0]$ tree .
+.
+├── build
+├── CMakeLists.txt
+├── fix-proto-dep.cmake
+├── include
+│   ├── client
+│   ├── httplib.h
+│   └── server
+├── proto
+│   └── contacts.proto
+└── src
+    ├── client
+    │   └── main.cc
+    └── server
+        └── main.cc
+
+9 directories, 6 files
+[wind@Ubuntu contacts4.0]$ # 和之前没有多大区别, CMakeLists.txt 只需要稍微改一改:
+[wind@Ubuntu contacts4.0]$ sed -n "31p" CMakeLists.txt 
+find_package(Threads REQUIRED)
+[wind@Ubuntu contacts4.0]$ sed -n "108,113p" CMakeLists.txt 
+    target_link_libraries(${target_name} PRIVATE
+        protobuf::libprotobuf
+        absl::strings
+        absl::log
+        Threads::Threads
+    )
+[wind@Ubuntu contacts4.0]$ # 就是把 pthread 链接上而已
+```
+
+```shell
+[wind@Ubuntu build]$ cmake .. -G Ninja && cmake --build .
+-- The CXX compiler identification is Clang 21.1.5
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Clang 21 + libc++ 已启用
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3")  
+-- 已添加可执行目标 → server (入口: src/server/main.cc)
+-- 已添加可执行目标 → client (入口: src/client/main.cc)
+-- 
+-- ==================================================
+--  项目              : ContactsDemo
+--  编译器            : /usr/bin/clang++ (Clang)
+--  标准库            : libc++
+--  Proto 输出目录     : /home/wind/protobuf_learning/contacts4.0/build/gen
+--  目标可执行文件     : server、client
+--  构建示例          : cmake --build build --target server
+--                    : cmake --build build --target client
+-- ==================================================
+-- 
+-- Configuring done (0.8s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/wind/protobuf_learning/contacts4.0/build
+[0/7] protoc → contacts.proto
+[7/7] Linking CXX executable client
+[wind@Ubuntu build]$ ls
+build.ninja  client  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.json  gen  server
+[wind@Ubuntu build]$ 
+```
+
 
 
 # 完
