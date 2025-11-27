@@ -1545,7 +1545,7 @@ message People{
 
 `ProtoBuf` 也允许⾃定义选项并使⽤, 但对于我们来说, 用不上, 不说了.
 
-## 网络通讯录
+## 通讯录 4.0
 
 在通讯录 4.0 中, 我们将真正使用网络进行进程间的信息交互.
 
@@ -1581,7 +1581,7 @@ wget https://raw.githubusercontent.com/yhirose/cpp-httplib/master/httplib.h
 │   ├── httplib.h
 │   └── server
 ├── proto
-│   └── contacts.proto
+│   └── contacts.proto	# 我是直接复制文件夹过来的, 实际上不会用他
 └── src
     ├── client
     │   └── main.cc
@@ -1637,6 +1637,179 @@ find_package(Threads REQUIRED)
 build.ninja  client  CMakeCache.txt  CMakeFiles  cmake_install.cmake  compile_commands.json  gen  server
 [wind@Ubuntu build]$ 
 ```
+
+![image-20251126221550785](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251126221550785.png)
+
+![image-20251126221604721](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251126221604721.png)
+
+好, 下面, 我们就来写第一个功能, 也就是增加新联系人的这个, 分别写它的请求消息和应答消息, 请求方面, 包含联系人姓名, 年龄, 电话号码, 应答消息, 则是一个`uid`, 即用户唯一标识符字符串.
+
+为了方便理解, 我们先回顾一下这张协议分层的图片
+
+![image-20251127132030718](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127132030718.png)
+
+`protobuf` 主要是工作在表示层
+
+![image-20251127132211253](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127132211253.png)
+
+这两个 `message` 将作为会话层 `httplib`的负载在网络中通信, 尽管 http 有自己的状态码, 但那个状态码主要是用于会话层的, 所以在这里, 我们在应答负载中, 增加了两个表述应用层调用结果的字段.
+
+接下来我们去客户端写一下应用层
+
+先把框架搭起来. 在这里我们采用的是短连接模式, 所以没有放到一个循环里, 在应用层的调用出现问题时, 我们将会抛出异常, 由外部统一捕获.
+
+```cpp
+#include <exception>
+#include <format>
+#include <iostream>
+#include <string>
+
+#include "httplib.h"
+#include "proto/add_contact.pb.h"
+
+using namespace std;
+using namespace httplib;
+
+void menu() {
+    cout << "-------------------------------------" << endl;
+    cout << "----------选择对应的通讯录操作----------" << endl;
+    cout << "------------ 1. 新增联系人 ------------" << endl;
+    cout << "------------ 2. 删除联系人 ------------" << endl;
+    cout << "---------- 3. 查看联系人列表 ----------" << endl;
+    cout << "-------- 4. 查看联系人详细信息 --------" << endl;
+    cout << "-------------- 0. 退出--------------" << endl;
+    cout << "-------------------------------------" << endl;
+}
+
+enum option_type {
+    QUIT_CONTACT = 0,
+    ADD_CONTACT = 1,
+    DELETE_CONTACT = 2,
+    FIND_CONTACTS = 3,
+    FIND_CONTACT_DETAIL = 4
+};
+
+class ContactsException : public exception {
+   public:
+    ContactsException(std::string m) : message(m) {}
+
+    const char* what() const noexcept override {
+        return message.c_str();
+    }
+
+   private:
+    std::string message;
+};
+
+void AddContact();
+
+// 短连接模式
+int main() {
+    try {
+        menu();
+        cout << "----> 请选择: ";
+        int option = 0;
+        cin >> option;
+        cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        switch (option) {
+            case option_type::QUIT_CONTACT:
+                cout << "-----程序退出-----" << endl;
+                break;
+            case option_type::ADD_CONTACT:
+                AddContact();
+                break;
+            case option_type::DELETE_CONTACT:
+                cout << "这个选项没写, 以后再来探索吧" << endl;
+                break;
+            case option_type::FIND_CONTACTS:
+                cout << "这个选项没写, 以后再来探索吧" << endl;
+                break;
+            case option_type::FIND_CONTACT_DETAIL:
+                cout << "这个选项没写, 以后再来探索吧" << endl;
+                break;
+            default:
+                cout << "如果这是图形化界面, 我根本不会让你有机会来这里!" << endl;
+                break;
+        }
+    } catch (ContactsException& e) {
+        cerr << format("客户端应用层异常: {}\n", e.what());
+    }
+    return 0;
+}
+
+void AddContact() {
+
+}
+
+```
+
+接下来我们着眼于 `AddContact` 这个调用
+
+![image-20251127155536040](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127155536040.png)
+
+关于 Post 方法, 在 Linux 网络那里我们也已经说过了, 这里着重说一下 `httplib` 中`client`的 `Post` 方法, 它有三个参数, 分别是  URL 的文件路径, 请求负载, 负载格式, 关于第一个 URL 文件路径, 你可以认为它指向的是 `server` 那边相同路径的处理方法, 由于我们用的是`protobuf`, 所以负载类型固定为`"application/protobuf"`
+
+![image-20251127163139883](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127163139883.png)
+
+至于收集信息, 和之前一样, 复制过来改改就行
+
+![image-20251127165026824](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127165026824.png)
+
+接下来是服务端
+
+![image-20251127214207292](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127214207292.png)
+
+![image-20251127214241415](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127214241415.png)
+
+对于 `uid` 的生成, 我们可以使用 `Boost` 的 `UUID`接口直接生成, 当前主流的 `UUID v4`标准约定 `UUID` 有三部分组成, 122比特长度的随机数, 4比特长度的 `UUID`大版本号, 对于`v4`来说自然是 `4`, `2` 到`3`比特描述具体的 `UUID`标准, 比如微软家的, 其他家的, 历史遗留.
+
+不过, 考虑到前面我也没给你们提供 `Boost` 库, 所以我们实际采用的方案是自己用伪随机函数生成, 相当于只要`UUID`中的随机数, 而且是自己控制随机算法的.
+
+具体的逻辑还是比较好理解的, 我们基于时间本身不断前进的特性, 先后随机出若干个随机数, 再把它们拼起来, 这样得到的随机数, 就能做到去中心级别的本地直接生成且极难重复的随机数.
+
+![image-20251127214313378](https://wind-note-image.oss-cn-shenzhen.aliyuncs.com/image-20251127214313378.png)
+
+```shell
+# 终端一
+[wind@Ubuntu build]$ ./server 
+---------服务启动---------
+
+# 终端二
+[wind@Ubuntu build]$ ./client 
+-------------------------------------
+----------选择对应的通讯录操作----------
+------------ 1. 新增联系人 ------------
+------------ 2. 删除联系人 ------------
+---------- 3. 查看联系人列表 ----------
+-------- 4. 查看联系人详细信息 --------
+-------------- 0. 退出--------------
+-------------------------------------
+----> 请选择: 1
+开始添加新联系人: 
+请依据提示, 依次输入新联系人的姓名, 年龄, 联系电话 
+请输入新联系人的姓名: CV-6
+请输入新联系人的年龄: 89
+请输入新联系人的电话号码, 支持多个号码保存, 如果确认, 请直接回车
+第1个: 1947217
+第2个: 
+正在打包收集信息并发送
+新增联系人成功, 联系人身份码为: 77500761e55b38b7b78c4520dd63a0e3
+[wind@Ubuntu build]$ 
+
+# 终端一
+[wind@Ubuntu build]$ ./server 
+---------服务启动---------
+接收到post请求: /contacts/add
+新增联系人↓
+联系人姓名: CV-6
+联系人年龄: 89
+电话1 : 1947217
+
+^C
+[wind@Ubuntu build]$ 
+```
+
+
 
 
 
