@@ -1,0 +1,17 @@
+// 表示层
+
+edition = "2024";
+
+package add_contact;
+
+message AddContactRequest{
+    string name = 1;
+    uint32 age = 2;
+    repeated string phones = 3;
+}
+
+message AddContactResponse{
+    bool success = 1;       // 应用层调用是否成功
+    string error_desc = 2;  // 调用错误原因
+    string uid = 3;
+}
