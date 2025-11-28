@@ -1,3 +1,0 @@
-/home/wind/protobuf_learning/compare/build/CMakeFiles/compare.dir
-/home/wind/protobuf_learning/compare/build/CMakeFiles/edit_cache.dir
-/home/wind/protobuf_learning/compare/build/CMakeFiles/rebuild_cache.dir
