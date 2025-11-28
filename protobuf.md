@@ -1809,8 +1809,242 @@ void AddContact() {
 [wind@Ubuntu build]$ 
 ```
 
+## 结尾
 
+在最后, 我们再写一个代码直观对比一下 `json` 和 `protobuf` , 我这里用的 `json` 是 `nlohmann/json`, 它是一个头文件级别的库, 不需要链接库文件, 只要包含头文件就行, 所以用起来比较方便.
 
+下面是 AI 按照我要求写的一份代码, 我自己就不写了
 
+```shell
+[wind@Ubuntu compare]$ tree .
+.
+├── build
+├── CMakeLists.txt
+├── include
+├── proto
+│   └── person.proto
+└── src
+    └── main.cc
+
+5 directories, 3 files
+[wind@Ubuntu compare]$ cat proto/person.proto 
+edition = "2024";
+
+message Person {
+    string name = 1;
+    int32 age = 2;
+    repeated string tags = 3;
+}
+[wind@Ubuntu compare]$ cat src/main.cc 
+#include <iostream>
+#include <chrono>
+#include <string>
+#include <vector>
+#include <nlohmann/json.hpp>
+#include "proto/person.pb.h"
+
+using json = nlohmann::json;
+using namespace std;
+
+Person MakePerson(int i) {
+    Person p;
+    p.set_name("User_" + std::to_string(i));
+    p.set_age(20 + (i % 10));
+    p.add_tags("tagA");
+    p.add_tags("tagB");
+    return p;
+}
+
+json MakeJsonPerson(int i) {
+    return {
+        {"name", "User_" + std::to_string(i)},
+        {"age", 20 + (i % 10)},
+        {"tags", {"tagA", "tagB"}}
+    };
+}
+
+int main() {
+    const int N = 50000;   // *** 调节循环次数，模拟数据变多 ***
+    std::vector<Person> pb_data;
+    std::vector<json> json_data;
+
+    pb_data.reserve(N);
+    json_data.reserve(N);
+
+    // 准备数据
+    for (int i = 0; i < N; ++i) {
+        pb_data.push_back(MakePerson(i));
+        json_data.push_back(MakeJsonPerson(i));
+    }
+
+    // ----------------- Protobuf serialize ------------------
+    auto t1 = chrono::high_resolution_clock::now();
+
+    size_t pb_total_size = 0;
+    std::vector<std::string> pb_encoded;
+    pb_encoded.reserve(N);
+
+    for (int i = 0; i < N; ++i) {
+        std::string out;
+        pb_data[i].SerializeToString(&out);
+        pb_total_size += out.size();
+        pb_encoded.push_back(std::move(out));
+    }
+
+    auto t2 = chrono::high_resolution_clock::now();
+
+    // ----------------- JSON serialize ----------------------
+    size_t json_total_size = 0;
+    std::vector<std::string> json_encoded;
+    json_encoded.reserve(N);
+
+    auto t3 = chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < N; ++i) {
+        std::string out = json_data[i].dump(); // 默认紧凑格式
+        json_total_size += out.size();
+        json_encoded.push_back(std::move(out));
+    }
+
+    auto t4 = chrono::high_resolution_clock::now();
+
+    // ----------------- 输出结果 -----------------------------
+    auto pb_time = chrono::duration<double, milli>(t2 - t1).count();
+    auto json_time = chrono::duration<double, milli>(t4 - t3).count();
+
+    cout << "================ 结果 ================\n";
+    cout << "数据条目数 N = " << N << "\n\n";
+    cout << "Protobuf:" << "\n";
+    cout << "  序列化耗时:  " << pb_time << " ms\n";
+    cout << "  总大小:      " << pb_total_size << " bytes\n\n";
+    cout << "JSON:" << "\n";
+    cout << "  序列化耗时:  " << json_time << " ms\n";
+    cout << "  总大小:      " << json_total_size << " bytes\n\n";
+
+    cout << "大小比 (JSON / PB): " << (double)json_total_size / pb_total_size << "\n";
+    cout << "时间比 (JSON / PB): " << (double)json_time / pb_time << "\n";
+}
+
+[wind@Ubuntu compare]$ cat CMakeLists.txt 
+cmake_minimum_required(VERSION 3.22)
+project(CompareJSONvsPB LANGUAGES CXX)
+
+# ==============================================================================
+# 1. 使用 Clang-21 + libc++
+# ==============================================================================
+if (DEFINED ENV{CXX})
+    set(CMAKE_CXX_COMPILER $ENV{CXX})
+else()
+    set(CMAKE_CXX_COMPILER clang++-21)
+endif()
+
+if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "需要使用 Clang 21：export CXX=clang++-21")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+add_compile_options("-stdlib=libc++")
+add_link_options("-stdlib=libc++" "-lc++abi")
+
+# ==============================================================================
+# 2. 引入 protobuf（来自 /opt/libcxx-pkgs）
+# ==============================================================================
+list(PREPEND CMAKE_PREFIX_PATH "/opt/libcxx-pkgs")
+find_package(Protobuf CONFIG REQUIRED)
+
+# ==============================================================================
+# 3. protoc 生成源码（最小版本）
+# ==============================================================================
+set(PROTO_DIR  "${CMAKE_SOURCE_DIR}/proto")
+set(GEN_DIR    "${CMAKE_BINARY_DIR}/gen")
+
+file(MAKE_DIRECTORY "${GEN_DIR}/proto")
+file(GLOB proto_files "${PROTO_DIR}/*.proto")
+
+foreach(proto ${proto_files})
+    get_filename_component(name_we ${proto} NAME_WE)
+    set(out_cc "${GEN_DIR}/proto/${name_we}.pb.cc")
+    set(out_h  "${GEN_DIR}/proto/${name_we}.pb.h")
+
+    add_custom_command(
+        OUTPUT ${out_cc} ${out_h}
+        COMMAND protobuf::protoc
+                --cpp_out=${GEN_DIR}/proto
+                --proto_path=${PROTO_DIR}
+                ${proto}
+        DEPENDS ${proto}
+        VERBATIM
+    )
+
+    list(APPEND PB_SRCS ${out_cc})
+    list(APPEND PB_HDRS ${out_h})
+endforeach()
+
+# ==============================================================================
+# 4. 可执行文件（只 main.cc + PB）
+# ==============================================================================
+add_executable(compare
+    src/main.cc
+    ${PB_SRCS}
+    ${PB_HDRS}
+)
+
+target_include_directories(compare PRIVATE
+    ${GEN_DIR}     # 让 pb 头文件可见
+    ${CMAKE_SOURCE_DIR}/include
+)
+
+target_link_libraries(compare PRIVATE
+    protobuf::libprotobuf
+)
+
+# ==============================================================================
+# 5. 编译信息
+# ==============================================================================
+message(STATUS "Clang + libc++ 已启用")
+message(STATUS "Protobuf 头文件目录: ${Protobuf_INCLUDE_DIRS}")
+message(STATUS "Proto 输入目录: ${PROTO_DIR}")
+message(STATUS "生成目录: ${GEN_DIR}/proto")
+
+[wind@Ubuntu compare]$ cd build/
+[wind@Ubuntu build]$ cmake .. -G Ninja && cmake --build .
+-- The CXX compiler identification is Clang 21.1.5
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/clang++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ZLIB: /usr/lib/x86_64-linux-gnu/libz.so (found version "1.3")  
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Clang + libc++ 已启用
+-- Protobuf 头文件目录: 
+-- Proto 输入目录: /home/wind/protobuf_learning/compare/proto
+-- 生成目录: /home/wind/protobuf_learning/compare/build/gen/proto
+-- Configuring done (0.9s)
+-- Generating done (0.0s)
+-- Build files have been written to: /home/wind/protobuf_learning/compare/build
+[4/4] Linking CXX executable compare
+[wind@Ubuntu build]$ ./compare 
+================ 结果 ================
+数据条目数 N = 50000
+
+Protobuf:
+  序列化耗时:  59.7634 ms
+  总大小:      1288890 bytes
+
+JSON:
+  序列化耗时:  171.064 ms
+  总大小:      2638890 bytes
+
+大小比 (JSON / PB): 2.04741
+时间比 (JSON / PB): 2.86235
+[wind@Ubuntu build]$ 
+```
+
+正如之前我说过的那样, 二进制是 `protobuf` 的优点, 也是缺点, 优点是效率高, 缺点是不是自然语言, 二进制, 读起来比较麻烦. 另外, 正是由于 `json` 比较好读, 所以用的人更多, 生态发展就更好, 因此其它平台对他支持更好, 特别是浏览器(因为`web`项目一般用 `json`), `protobuf` 则更在乎高性能, 但问题是, 计算机发展的也很快, 绝大多数情况下, 对性能要求反而不是特别严格, 所以从某种角度来说, "高性能开发" 的地位在如今比较尴尬.
 
 # 完
